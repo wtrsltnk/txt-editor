@@ -4,6 +4,8 @@
 #include <GL/gl.h>
 #include <GL/gl.h>
 #include <stdio.h>
+#include <iostream>
+#include <chrono>
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
@@ -33,12 +35,11 @@ void CenterWindow(HWND hWnd);
 unsigned char ttf_buffer[1<<20];
 unsigned char temp_bitmap[512*512];
 
-stbtt_bakedchar mCharData[96]; // ASCII 32..126 is 95 glyphs
+stbtt_bakedchar mCharData[128]; // ASCII 32..126 is 95 glyphs
 GLuint mTextureId;
 
 static TxtBuffer txt;
-static int cursor = 0;
-static int cursorLength = 1;
+static TxtSelection selection(&txt);
 
 void stbtt_initfont(void)
 {
@@ -67,7 +68,7 @@ void stbtt_initfont(void)
         return;
     }
 
-    stbtt_BakeFontBitmap(ttfBuffer,0, _config.fontSize, bmap, 512, 512, 32, 96, mCharData);
+    stbtt_BakeFontBitmap(ttfBuffer,0, _config.fontSize, bmap, 512, 512, 0, 128, mCharData);
 
     // can free ttf_buffer at this point
     glGenTextures(1, &mTextureId);
@@ -100,11 +101,89 @@ void getBakedQuad(int pw, int ph, int char_index, float *xpos, float *ypos, stbt
     *xpos += b->xadvance;
 }
 
-void stbtt_print(float x, float y, const char *text)
+bool isSelected(int cur)
 {
-    float curx = 0.0f;
-    float cury = 0.0f;
-    bool found = false;
+    if (selection.cursorLength == 0) return false;
+
+    long selectionMin = selection.cursorLength < 0 ? selection.cursor + selection.cursorLength : selection.cursor;
+    long selectionMax = selection.cursorLength < 0 ? selection.cursor : selection.cursor + selection.cursorLength;
+    return cur >= selectionMin && cur < selectionMax;
+}
+
+struct Color{
+    float r, g, b, a;
+};
+
+const Color selectionColor = { 0.0f, 0.5f, 1.0f, 0.5f };
+const Color cursorColor = { 0.0f, 0.5f, 1.0f, 0.8f };
+const Color fontColor = { 0.0f, 0.25f, 0.5f, 1.0f };
+
+void drawSelection(float x, float y, const char *text)
+{
+    long cur = 0;
+    float initialX = x;
+
+    stbtt_aligned_quad q;
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glBegin(GL_TRIANGLES);
+
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(selectionColor.r, selectionColor.g, selectionColor.b, selectionColor.a);
+
+    glEnable(GL_BLEND);
+    glEnable (GL_BLEND);
+    glBlendFunc(GL_ONE_MINUS_DST_COLOR,GL_ZERO);
+
+    while (text[cur - 1])
+    {
+        int c = (unsigned char)text[cur];
+        getBakedQuad(512, 512, 'g', &x, &y, &q);
+
+        if (selection.cursorLength == 0 && cur == selection.cursor)
+        {
+            glColor4f(cursorColor.r, cursorColor.g, cursorColor.b, cursorColor.a);
+            glVertex2f(q.x0-1.0f, q.y1 + _config.fontSize);
+            glVertex2f(q.x0+1.0f, q.y1);
+            glVertex2f(q.x0+1.0f, q.y1 + _config.fontSize);
+
+            glVertex2f(q.x0-1.0f, q.y1 + _config.fontSize);
+            glVertex2f(q.x0+1.0f, q.y1);
+            glVertex2f(q.x0-1.0f, q.y1);
+            glColor4f(selectionColor.r, selectionColor.g, selectionColor.b, selectionColor.a);
+        }
+        else
+        {
+            if (isSelected(cur))
+            {
+                glVertex2f(q.x0, q.y1 + _config.fontSize);
+                glVertex2f(q.x1, q.y1);
+                glVertex2f(q.x1, q.y1 + _config.fontSize);
+                glVertex2f(q.x0, q.y1 + _config.fontSize);
+                glVertex2f(q.x1, q.y1);
+                glVertex2f(q.x0, q.y1);
+            }
+        }
+
+        if (c == '\n')
+        {
+            x = initialX;
+            y -= _config.fontSize;
+        }
+
+        ++cur;
+    }
+
+    glEnable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glEnd();
+}
+
+void drawText(float x, float y, const char *text)
+{
     long cur = 0;
     float initialX = x;
 
@@ -116,14 +195,7 @@ void stbtt_print(float x, float y, const char *text)
 
     while (text[cur])
     {
-        glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
-
-        if (cur == cursor)
-        {
-            found = true;
-            curx = x;
-            cury = y;
-        }
+        glColor4f(fontColor.r, fontColor.g, fontColor.b, fontColor.a);
 
         int c = (unsigned char)text[cur];
         if (c == '\n')
@@ -131,10 +203,10 @@ void stbtt_print(float x, float y, const char *text)
             x = initialX;
             y -= _config.fontSize;
         }
-        else if (c >= 32 && c < 128)
+        else if (c >= 0 && c < 128)
         {
             stbtt_aligned_quad q;
-            getBakedQuad(512, 512, c-32, &x, &y, &q);
+            getBakedQuad(512, 512, c, &x, &y, &q);
 
             glTexCoord2f(q.s0, q.t0);
             glVertex2f(q.x0, q.y0);
@@ -154,36 +226,8 @@ void stbtt_print(float x, float y, const char *text)
         ++cur;
     }
 
-    if (!found)
-    {
-        curx = x;
-        cury = y;
-    }
-
     glEnd();
     glPopMatrix();
-
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    glBegin(GL_TRIANGLES);
-
-    glDisable(GL_TEXTURE_2D);
-    glColor4f(0.0f, 0.0f, 0.0f, 0.3f);
-
-    stbtt_aligned_quad q;
-    getBakedQuad(512, 512, '|' - 32, &curx, &cury, &q);
-
-    glVertex2f(q.x0 - 5.0f, q.y0);
-    glVertex2f(q.x0 - 3.0f, q.y1);
-    glVertex2f(q.x0 - 3.0f, q.y0);
-    glVertex2f(q.x0 - 5.0f, q.y0);
-    glVertex2f(q.x0 - 5.0f, q.y1);
-    glVertex2f(q.x0 - 3.0f, q.y1);
-
-    glEnable(GL_TEXTURE_2D);
-    glEnable(GL_BLEND);
-
-    glEnd();
 }
 
 void setupOrthoView()
@@ -255,6 +299,24 @@ char wParamToChar(WPARAM wParam, bool shift, bool capslock)
     return '\0';
 }
 
+void cutSelectionToClipboard()
+{
+    // TODO cut to clipboard
+    txt.removeText(selection);
+}
+
+void copySelectionToClipboard()
+{
+
+}
+
+void pasteSelectionFromClipboard()
+{
+    const char* dummy = "[Dummy clipboard text]";
+
+    selection.addText(dummy);
+}
+
 const float white[] = { 255.0f, 255.0f, 255.0f };
 const float grey[] = { 155.0f, 155.0f, 155.0f };
 static bool splitter_grabbed = false;
@@ -267,107 +329,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     switch (message)
     {
-    case WM_CREATE:
-    {
-        CenterWindow(hwnd);
-        glEnable (GL_BLEND);
-        glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        break;
-    }
-
-    case WM_DESTROY:
-    {
-        PostQuitMessage(0);
-        break;
-    }
-
     case WM_KEYUP:
     {
-        if (VK_CONTROL == wParam)
-        {
-            ctrl = false;
-        }
-        else if (VK_MENU == wParam)
-        {
-            alt = false;
-        }
-        else if (VK_SHIFT == wParam)
-        {
-            shift = false;
-        }
+        if (VK_CONTROL == wParam) ctrl = false;
+        else if (VK_MENU == wParam) alt = false;
+        else if (VK_SHIFT == wParam) shift = false;
         break;
     }
 
     case WM_KEYDOWN:
     {
-        if (VK_ESCAPE == wParam)
-        {
-            DestroyWindow(hwnd);
-        }
-        else if (VK_CONTROL == wParam)
-        {
-            ctrl = true;
-        }
-        else if (VK_MENU == wParam)
-        {
-            alt = true;
-        }
-        else if (VK_SHIFT == wParam)
-        {
-            shift = true;
-        }
-        else if (VK_CAPITAL == wParam)
-        {
-            capslock = !capslock;
-        }
-        else if (VK_LEFT == wParam)
-        {
-            if (cursor > 0)
-            {
-                cursor--;
-            }
-        }
-        else if (VK_RIGHT == wParam)
-        {
-            if (cursor < txt.bufferSize())
-            {
-                cursor++;
-            }
-        }
-        else if (VK_BACK == wParam)
-        {
-            if (cursor > 0)
-            {
-                txt.removeText(cursor, 1);
-                cursor--;
-            }
-        }
-        else if (VK_DELETE == wParam)
-        {
-            if (cursor >= 0 && cursor < txt.bufferSize())
-            {
-                txt.removeText(cursor + 1, 1);
-            }
-        }
+        if (ctrl && !shift && 'Z' == wParam) txt.undo();
+        else if (ctrl && shift && 'Z' == wParam) txt.redo();
+        else if (ctrl && 'A' == wParam) selection.selectAll();
+        else if (ctrl && 'X' == wParam) cutSelectionToClipboard();
+        else if (ctrl && 'C' == wParam) copySelectionToClipboard();
+        else if (ctrl && 'V' == wParam) pasteSelectionFromClipboard();
+        else if (VK_ESCAPE == wParam) DestroyWindow(hwnd);
+        else if (VK_CONTROL == wParam) ctrl = true;
+        else if (VK_MENU == wParam) alt = true;
+        else if (VK_SHIFT == wParam) shift = true;
+        else if (VK_CAPITAL == wParam) capslock = !capslock;
+        else if (VK_LEFT == wParam) selection.moveLeft(shift, ctrl);
+        else if (VK_UP == wParam) selection.moveUp(shift, ctrl);
+        else if (VK_RIGHT == wParam) selection.moveRight(shift, ctrl);
+        else if (VK_DOWN == wParam) selection.moveDown(shift, ctrl);
+        else if (VK_BACK == wParam) selection.backspace(shift, ctrl);
+        else if (VK_DELETE == wParam) selection.del(shift, ctrl);
+        else if (VK_HOME == wParam) selection.home(shift, ctrl);
+        else if (VK_END == wParam) selection.end(shift, ctrl);
+        else if (!alt) selection.addChar(wParamToChar(wParam, shift, capslock));
 
-        if (ctrl && !shift && 0x5A == wParam)
-        {
-            txt.undo();
-        }
-        else if (ctrl && shift && 0x5A == wParam)
-        {
-            txt.redo();
-        }
-        else
-        {
-            char buff[2] = { '\0' };
-            buff[0] = wParamToChar(wParam, shift, capslock);
-            if (buff[0] != '\0')
-            {
-                txt.addText(cursor, buff, 1);
-                cursor++;
-            }
-        }
         InvalidateRect(hwnd, NULL, false);
         break;
     }
@@ -422,6 +414,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     }
 
+    case WM_CREATE:
+    {
+        CenterWindow(hwnd);
+        glEnable (GL_BLEND);
+        glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        break;
+    }
+
+    case WM_DESTROY:
+    {
+        PostQuitMessage(0);
+        break;
+    }
+
     case WM_PAINT:
     {
         PAINTSTRUCT ps;
@@ -439,10 +445,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        glColor3f(89 / 255.0f, 96 / 255.0f, 105 / 255.0f);
-        stbtt_print(_config.split + _config.margin + _config.padding + scrollx,
-                    windowHeight - _config.fontSize - _config.margin - _config.padding - scrolly,
-                    txt.buffer());
+        auto x = _config.split + _config.margin + _config.padding + scrollx;
+        auto y = windowHeight - _config.fontSize - _config.margin - _config.padding - scrolly;
+
+        drawSelection(x, y, txt.buffer());
+        drawText(x, y, txt.buffer());
 
         SwapBuffers(hdc);
         wglMakeCurrent(hdc,0);

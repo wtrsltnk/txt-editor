@@ -1,6 +1,8 @@
 #ifndef TXT_H
 #define TXT_H
 
+#include <vector>
+
 typedef long txtsz;     // size type, used for text buffer sizes
 typedef long txtcur;    // cursor type, used for positions within text buffers
 typedef char txtchr;    // char type, used as type of the text buffers
@@ -25,14 +27,35 @@ class EditEvent
 public:
     EditEvent();
 
-    EditEventTypes type;      // 0 means deletion, 1 means insertion
-    txtcur position;              // the position in the main buffer to add or delete
-    txtchr* buffer;                 // the added or removed text in this event
-    txtsz size;                   // the size of the buffer text
+    EditEventTypes type;            // 0 means deletion, 1 means insertion
+    txtcur position;                // the position in the main buffer to add or delete
+    std::vector<txtchr> buffer;     // the added or removed text in this event
 
     // double linked list
     EditEvent* prev;
     EditEvent* next;
+};
+
+class TxtSelection
+{
+    class TxtBuffer* _txt;
+public:
+    TxtSelection(class TxtBuffer* txt);
+
+    long cursor;
+    long cursorLength;
+
+    void addChar(txtchr c);
+    void addText(const txtchr* text);
+    void moveLeft(bool shift, bool ctrl);
+    void moveUp(bool shift, bool ctrl);
+    void moveRight(bool shift, bool ctrl);
+    void moveDown(bool shift, bool ctrl);
+    void selectAll();
+    void backspace(bool shift, bool ctrl);
+    void del(bool shift, bool ctrl);
+    void home(bool shift, bool ctrl);
+    void end(bool shift, bool ctrl);
 };
 
 class TxtBuffer
@@ -53,8 +76,11 @@ class TxtBuffer
 public:
     TxtBuffer();
 
-    void addText(txtcur position, const txtchr* text, txtsz size);
+    void addText(txtcur position, txtsz selectionLength, const txtchr* text, txtsz size);
+    void addText(const TxtSelection& selection, const txtchr* text, txtsz size);
     void removeText(txtcur position, txtsz size);
+    void removeText(const TxtSelection& selection);
+
     bool undo();
     int undoCount();
     bool redo();
@@ -62,6 +88,9 @@ public:
 
     const char* buffer() const;
     const txtsz bufferSize() const;
+
+    txtcur findLineStart(txtcur from) const;
+    txtcur findNextLineStart(txtcur from) const;
 };
 
 #endif // TXT_H
