@@ -2,4 +2,4 @@
 
 With a screenshot:
 
-!(screenshot)[screenshot.png]
+![screenshot](screenshot.png)
